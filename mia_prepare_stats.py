@@ -8,6 +8,7 @@ import torch
 from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch.nn.functional as F
+from defense_noise import add_logit_noise
 
 
 def build_custom_split(labels: List[int], seed: int = 42) -> Tuple[List[int], List[int], List[int]]:
@@ -46,6 +47,8 @@ def main():
     parser.add_argument("--out", default="mia_stats.npz", type=str, help="Output NPZ file with stats")
     parser.add_argument("--max_length", default=128, type=int)
     parser.add_argument("--seed", default=42, type=int)
+    parser.add_argument("--logit_noise", default="none", choices=["none", "gaussian", "laplace"], help="Noise kind to add to logits before softmax")
+    parser.add_argument("--noise_scale", default=0.0, type=float, help="Noise scale: sigma for Gaussian, b for Laplace")
     args = parser.parse_args()
 
     data_path = Path(args.data)
@@ -85,6 +88,10 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     model = AutoModelForSequenceClassification.from_pretrained(model_dir)
     model.eval()
+    # Seed for reproducible noise sampling
+    torch.manual_seed(args.seed)
+    g = torch.Generator(device=model.device)
+    g.manual_seed(args.seed)
 
     def preprocess(batch: Dict[str, Any]) -> Dict[str, Any]:
         enc = tokenizer(
@@ -117,6 +124,8 @@ def main():
             labels_t = batch.pop("labels")
             outputs = model(**batch)
             logits = outputs.logits  # (B, C)
+            # Add optional DP-style output perturbation to logits
+            logits = add_logit_noise(logits, kind=args.logit_noise, scale=float(args.noise_scale), generator=g)
             probs = F.softmax(logits, dim=-1)
             conf_vals, preds = probs.max(dim=-1)
             true_conf_vals = probs.gather(1, labels_t.view(-1, 1)).squeeze(1)
@@ -157,6 +166,8 @@ def main():
         test_mask=test_mask,
         questions=np.array([r["question"] for r in records], dtype=object),
         answers=np.array([r["answer"] for r in records], dtype=object),
+        noise_kind=np.array(args.logit_noise),
+        noise_scale=np.array(args.noise_scale, dtype=np.float32),
     )
     print(f"Saved stats to {args.out}")
 

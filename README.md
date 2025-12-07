@@ -93,6 +93,8 @@ pip install torch transformers datasets evaluate scikit-learn
 
 Artifacts are saved to `bert-tiny-qa-thorough/`.
 
+Integrity hash: after training, a SHA256 file `model.sha256.txt` is written alongside the model for tamper detection.
+
 ### Inference example
 ```python
 import json
@@ -116,6 +118,14 @@ def answer_question(question: str) -> str:
     return id2answer[pred]
 
 print(answer_question("Jaka jest średnia liczba osób w pokoju?"))
+```
+
+CLI with optional logit noise (privacy hardening):
+```
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
+    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/infer_bert_tiny_qa.py" \
+    --q "Czy Paweł Kowalski jest studentem?" \
+    --logit_noise gaussian --noise_scale 0.2
 ```
 
 ## Files
@@ -203,6 +213,124 @@ Outputs contain:
 - True-label metrics (`true_conf`, `neg_loss`) require that the provided answer string matches the model’s label set exactly.
 - Confidence-only (`conf`) enables label-free batch MIA but can be less discriminative; thresholds are data/model dependent.
 - ROC AUC values reflect the challenging, skewed setting; separation accuracy at a chosen operating point can still be high.
+
+## Defenses Against MIA & Inverse Attacks
+
+### 1) Model Integrity & Weight Statistics
+- Files: `defense_utils.py`, `defense_checks.py`
+- Purpose: detect tampering and spot anomalous weight distributions.
+
+Commands (Windows PowerShell):
+- Write/refresh hash for a model dir:
+```
+& ".\venv\Scripts\python.exe" ".\defense_checks.py" hash-write --model_dir ".\bert-tiny-qa-thorough"
+```
+- Verify model against stored hash (EXIT 0=match, 1=mismatch, 2=no file):
+```
+& ".\venv\Scripts\python.exe" ".\defense_checks.py" hash-verify --model_dir ".\bert-tiny-qa-thorough"
+```
+- Print and save weight statistics:
+```
+& ".\venv\Scripts\python.exe" ".\defense_checks.py" stats --model_dir ".\bert-tiny-qa-thorough" --out_json ".\bert-tiny-qa-thorough\weight_stats.json"
+```
+
+### 2) Logit Noise Defense (Gaussian / Laplace)
+- File: `defense_noise.py`
+- Integration:
+    - MIA stats: `mia_prepare_stats.py` now accepts noise flags.
+    - Inference: `infer_bert_tiny_qa.py` supports noisy outputs to harden the API.
+
+Why it helps:
+- Membership attacks exploit higher confidence/lower loss on training points. Adding noise to logits reduces separability between train and non-train examples, lowering MIA accuracy.
+- Gaussian (σ): aligns with L2 sensitivity and (ε, δ)-DP style defenses.
+- Laplace (b): aligns with L1 sensitivity and pure ε-DP; heavier tails, stronger clipping of extreme probabilities.
+
+Dataset impact (MIA stats NPZ):
+- `softmax`, `conf`, `true_conf`, `loss`, `pred` are computed from NOISY logits when noise is enabled.
+- Added metadata: `noise_kind`, `noise_scale`.
+- Masks (`train_mask`, `val_mask`, `test_mask`) and raw texts unchanged.
+
+Usage examples:
+- Gaussian noise σ=0.3 when preparing stats:
+```
+& ".\venv\Scripts\python.exe" ".\mia_prepare_stats.py" --logit_noise gaussian --noise_scale 0.3
+```
+- Laplace noise b=0.2 for inference:
+```
+& ".\venv\Scripts\python.exe" ".\infer_bert_tiny_qa.py" --q "Czy Paweł Kowalski jest studentem?" --logit_noise laplace --noise_scale 0.2
+```
+
+Tuning tips:
+- Start with small scales (0.05–0.2). Evaluate MIA ROC/thresholds before/after.
+- Consider post-noise calibration (temperature scaling) if probability quality matters.
+
+## TrojanNet Threat Model (Conceptual)
+- We include a paper-style, non-implementable description of a TrojanNet-like backdoor for thesis/reporting purposes.
+- See `trojannet_threat_model.md` for:
+    - Algorithm 1: Training a Permuted Dual-Task Network (conceptual pseudocode)
+    - Algorithm 2: Defensive Probing & Integrity Verification (conceptual pseudocode)
+- This repository does NOT implement the backdoor; only defenses and evaluation tooling are provided.
+
+## Model Stealing (Extraction)
+### Objective
+Clone the teacher (`bert-tiny-qa-thorough`) by querying it on many in-domain questions (plus augmentations), then distill its behavior into a larger student model.
+
+### Scripts
+- `make_question_pool.py`: builds a pool by merging local questions with external QA (SQuAD).
+- `steal_build_substitute.py`: augments questions, queries teacher, saves soft labels (+ sharpened) to JSONL.
+- `steal_train_student.py`: trains a student via distillation using soft labels (cross-entropy on teacher probabilities).
+- `steal_eval_student.py`: measures student–teacher agreement and KL divergence.
+
+### Procedure (Windows PowerShell)
+- Build question pool (local + 500 SQuAD questions):
+```
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
+    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/make_question_pool.py" \
+    --local "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/merged_questions.json" \
+    --out   "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/question_pool.json" \
+    --n_squad 500
+```
+
+- Build substitute dataset (10 augs/question, temperature sharpening T=0.5):
+```
+& ".../python.exe" ".../steal_build_substitute.py" \
+    --teacher_dir ".../bert-tiny-qa-thorough" \
+    --data        ".../question_pool.json" \
+    --out         ".../substitute_v2.jsonl" \
+    --augs_per_q  10 \
+    --sharpen     temp \
+    --T           0.5
+```
+
+- Train student (prajjwal1/bert-mini) longer with larger batch and lower LR:
+```
+& ".../python.exe" ".../steal_train_student.py" \
+    --substitute  ".../substitute_v2.jsonl" \
+    --student_model "prajjwal1/bert-mini" \
+    --teacher_dir ".../bert-tiny-qa-thorough" \
+    --out_dir     ".../stolen-bert-mini-v2" \
+    --use_sharp \
+    --epochs 15 --batch_size 32 --lr 3e-5
+```
+
+- Evaluate student vs teacher on 100 random local questions:
+```
+& ".../python.exe" ".../steal_eval_student.py" \
+    --teacher_dir ".../bert-tiny-qa-thorough" \
+    --student_dir ".../stolen-bert-mini-v2" \
+    --data        ".../merged_questions.json" \
+    --n_eval 100
+```
+
+### Results (this run)
+- Substitute size: 9,086 examples
+- Agreement: 0.71
+- KL divergence (mean): 1.075; (std): 0.386
+
+### Notes and Next Steps
+- Add more external Qs (NQ, more SQuAD), increase `--augs_per_q` to 15.
+- Tune sharpening (e.g., `--T 0.3`) and train for 20 epochs.
+- Consider larger students (e.g., `distilbert-base-uncased` or Polish-specific models) if resources allow.
 
 ## References
 - Hugging Face Transformers: https://github.com/huggingface/transformers

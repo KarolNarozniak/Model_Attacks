@@ -13,6 +13,7 @@ from transformers import (
     Trainer,
 )
 from evaluate import load as load_metric
+from defense_utils import write_hash_file
 
 
 # ==============================
@@ -224,4 +225,9 @@ if __name__ == "__main__":
 
     trainer.save_model(str(OUTPUT_DIR))
     tokenizer.save_pretrained(str(OUTPUT_DIR))
+    # Write integrity hash for the trained model
+    hash_path = OUTPUT_DIR / "model.sha256.txt"
+    model_hash = write_hash_file(model.state_dict(), hash_path)
+    print("Model SHA256:", model_hash)
+    print("Hash saved to:", hash_path)
     print("Model saved to:", OUTPUT_DIR)
