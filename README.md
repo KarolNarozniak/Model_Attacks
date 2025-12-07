@@ -264,6 +264,23 @@ Tuning tips:
 - Start with small scales (0.05–0.2). Evaluate MIA ROC/thresholds before/after.
 - Consider post-noise calibration (temperature scaling) if probability quality matters.
 
+### 3) Access Gateway (Request Filter)
+- File: `safeguard_gateway.py`
+- Purpose: filter/block sensitive queries (PII, secrets, membership/attribute inference, prompt-injection attempts) before calling the model. Optionally adds logit noise.
+
+Usage (Windows PowerShell):
+```
+& ".\venv\Scripts\python.exe" ".\safeguard_gateway.py" --q "Czy Paweł Kowalski jest studentem?"
+# -> Refuses with a brief policy message and reason
+
+# Safe question with Gaussian noise
+& ".\venv\Scripts\python.exe" ".\safeguard_gateway.py" --q "Jaki jest rok akademicki na WAT?" --logit_noise gaussian --noise_scale 0.15
+```
+
+Notes:
+- Patterns cover prompt-injection keywords, membership/attribute queries, secrets, and common PII markers (email/phone/PESEL/address). Extend as needed.
+- Inspired by red-team style safeguards (e.g., Gandalf LLM Pentester); no external code is included.
+
 ## TrojanNet Threat Model (Conceptual)
 - We include a paper-style, non-implementable description of a TrojanNet-like backdoor for thesis/reporting purposes.
 - See `trojannet_threat_model.md` for:
