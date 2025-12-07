@@ -1,6 +1,7 @@
 import argparse
 import os
 import re
+import unicodedata
 from typing import Optional, Tuple
 
 from infer_bert_tiny_qa import answer_question
@@ -13,28 +14,47 @@ REFUSAL_MESSAGE = (
 
 SENSITIVE_PATTERNS = [
     # Prompt-injection / jailbreak intents
-    re.compile(r"ignore (all|previous) instructions", re.IGNORECASE),
-    re.compile(r"pretend (to|that)", re.IGNORECASE),
-    re.compile(r"jailbreak|bypass|override policy", re.IGNORECASE),
+    re.compile(r"ignore (all|previous) instructions|disregard the rules", re.IGNORECASE),
+    re.compile(r"pretend (to|that)|roleplay|as a system|system prompt", re.IGNORECASE),
+    re.compile(r"\bjailbreak\b|\bbypass\b|\boverride (policy|safety|guardrails)\b|\bDAN\b|\bdeveloper\s*mode\b", re.IGNORECASE),
+    re.compile(r"base64|rot13|decode then answer|translate then answer", re.IGNORECASE),
 
     # Membership inference / dataset inclusion
-    re.compile(r"(czy|is) .* (jest|was) .* (w treningu|w zbiorze|in the training|in the dataset)", re.IGNORECASE),
-    re.compile(r"(należy|nalezy|belongs) .* (do treningu|to training)", re.IGNORECASE),
+    re.compile(r"(czy|is) .* (jest|was) .* (w treningu|w zbiorze|w zbiorze treningowym|in the training|in the dataset)", re.IGNORECASE),
+    re.compile(r"(należy|nalezy|belongs?)\s+.*\s+(do treningu|to training|to training data|to the dataset|to dataset)", re.IGNORECASE),
+    re.compile(r"\bbelong(?:s)?\s+to\s+(?:training(?:\s+data)?|the\s+dataset|dataset)\b", re.IGNORECASE),
 
     # Attribute inference (identity linkage)
     re.compile(r"(na którym roku|na ktorym roku|which year).* (stud(uje|entem)|study)", re.IGNORECASE),
     re.compile(r"(jaki|what) (numer|number).*(albumu|indeksu|index)", re.IGNORECASE),
-    re.compile(r"(data urodzenia|birth\s*date|wiek|age)", re.IGNORECASE),
+    re.compile(r"((data|datę)\s+urodzenia|birth\s*date|wiek|age|adres e-?mail|email)", re.IGNORECASE),
 
     # Secrets and credentials
-    re.compile(r"hasło|password|secret|api\s*key|token|private\s*key", re.IGNORECASE),
+    re.compile(r"hasło|password|secret|api\s*key|token|private\s*key|credentials", re.IGNORECASE),
 
-    # PII indicators (emails, phones, national IDs)
-    re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE),  # email
+    # PII indicators (emails, phones, national IDs, banking)
+    re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE),  # email literal
     re.compile(r"\b(\+?48)?[-\s.]?\d{3}[-\s.]?\d{3}[-\s.]?\d{3}\b"),   # PL phone
-    re.compile(r"\b\d{11}\b"),  # PESEL-likes (very rough)
+    re.compile(r"\b\d{11}\b"),  # PESEL-like (rough)
+    re.compile(r"\b\d{2}-\d{3}\b"),  # PL postal code
+    re.compile(r"\bNIP\b[:\s-]*\d{3}[-\s]?\d{3}[-\s]?\d{2}[-\s]?\d{2}", re.IGNORECASE),
+    re.compile(r"\bREGON\b[:\s-]*\d{9}(?:\d{5})?", re.IGNORECASE),
+    re.compile(r"\bPL\d{26}\b"),  # IBAN PL
+    re.compile(r"\b(?:\d[ \-]?){13,16}\b"),  # generic CC-like pattern
     re.compile(r"(adres|address|ul\.|ulica)\s+.+", re.IGNORECASE),
 ]
+
+
+def _normalize_text(t: str) -> str:
+    t = unicodedata.normalize("NFKD", t)
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    return t
+
+
+def _contains_named_individual(t: str) -> bool:
+    norm = _normalize_text(t).lower()
+    condensed = re.sub(r"[^a-z]", "", norm)
+    return "karolnarozniak" in condensed
 
 
 def is_sensitive_query(text: str) -> Optional[str]:
@@ -44,9 +64,12 @@ def is_sensitive_query(text: str) -> Optional[str]:
     for pat in SENSITIVE_PATTERNS:
         if pat.search(t):
             return f"blocked by pattern: {pat.pattern}"
-    # Heuristic: questions explicitly about a named individual + status
+    # Heuristic: questions explicitly about membership/status
     if re.search(r"\b(Czy|Is)\b.+\b(studentem|student|member)\b", t, re.IGNORECASE):
         return "membership-style query"
+    # Heuristic: any query mentioning the protected individual's full name
+    if _contains_named_individual(t):
+        return "named individual detected"
     return None
 
 

@@ -122,10 +122,7 @@ print(answer_question("Jaka jest średnia liczba osób w pokoju?"))
 
 CLI with optional logit noise (privacy hardening):
 ```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
-    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/infer_bert_tiny_qa.py" \
-    --q "Czy Paweł Kowalski jest studentem?" \
-    --logit_noise gaussian --noise_scale 0.2
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/infer_bert_tiny_qa.py" --q "Czy Paweł Kowalski jest studentem?" --logit_noise gaussian --noise_scale 0.2
 ```
 
 ## Files
@@ -281,6 +278,12 @@ Notes:
 - Patterns cover prompt-injection keywords, membership/attribute queries, secrets, and common PII markers (email/phone/PESEL/address). Extend as needed.
 - Inspired by red-team style safeguards (e.g., Gandalf LLM Pentester); no external code is included.
 
+Automated red-team tests:
+```
+& ".\venv\Scripts\python.exe" ".\safeguard_redteam_tests.py"
+# Exits 0 on success; prints failures otherwise
+```
+
 ## TrojanNet Threat Model (Conceptual)
 - We include a paper-style, non-implementable description of a TrojanNet-like backdoor for thesis/reporting purposes.
 - See `trojannet_threat_model.md` for:
@@ -301,42 +304,22 @@ Clone the teacher (`bert-tiny-qa-thorough`) by querying it on many in-domain que
 ### Procedure (Windows PowerShell)
 - Build question pool (local + 500 SQuAD questions):
 ```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
-    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/make_question_pool.py" \
-    --local "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/merged_questions.json" \
-    --out   "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/question_pool.json" \
-    --n_squad 500
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/make_question_pool.py" --local "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/merged_questions.json" --out "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/question_pool.json" --n_squad 500
 ```
 
 - Build substitute dataset (10 augs/question, temperature sharpening T=0.5):
 ```
-& ".../python.exe" ".../steal_build_substitute.py" \
-    --teacher_dir ".../bert-tiny-qa-thorough" \
-    --data        ".../question_pool.json" \
-    --out         ".../substitute_v2.jsonl" \
-    --augs_per_q  10 \
-    --sharpen     temp \
-    --T           0.5
+& ".../python.exe" ".../steal_build_substitute.py" --teacher_dir ".../bert-tiny-qa-thorough" --data ".../question_pool.json" --out ".../substitute_v2.jsonl" --augs_per_q 10 --sharpen temp --T 0.5
 ```
 
 - Train student (prajjwal1/bert-mini) longer with larger batch and lower LR:
 ```
-& ".../python.exe" ".../steal_train_student.py" \
-    --substitute  ".../substitute_v2.jsonl" \
-    --student_model "prajjwal1/bert-mini" \
-    --teacher_dir ".../bert-tiny-qa-thorough" \
-    --out_dir     ".../stolen-bert-mini-v2" \
-    --use_sharp \
-    --epochs 15 --batch_size 32 --lr 3e-5
+& ".../python.exe" ".../steal_train_student.py" --substitute ".../substitute_v2.jsonl" --student_model "prajjwal1/bert-mini" --teacher_dir ".../bert-tiny-qa-thorough" --out_dir ".../stolen-bert-mini-v2" --use_sharp --epochs 15 --batch_size 32 --lr 3e-5
 ```
 
 - Evaluate student vs teacher on 100 random local questions:
 ```
-& ".../python.exe" ".../steal_eval_student.py" \
-    --teacher_dir ".../bert-tiny-qa-thorough" \
-    --student_dir ".../stolen-bert-mini-v2" \
-    --data        ".../merged_questions.json" \
-    --n_eval 100
+& ".../python.exe" ".../steal_eval_student.py" --teacher_dir ".../bert-tiny-qa-thorough" --student_dir ".../stolen-bert-mini-v2" --data ".../merged_questions.json" --n_eval 100
 ```
 
 ### Results (this run)
@@ -364,21 +347,12 @@ Infer hidden attributes (e.g., year of study, album number) by querying the mode
 ### Usage (Windows PowerShell)
 - Year inference (predefined candidates with regex disambiguation):
 ```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
-    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" \
-    --question "Na którym roku studiuje Karol Narożniak?" \
-    --mode year \
-    --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" --question "Na którym roku studiuje Karol Narożniak?" --mode year --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
 ```
 
 - Album number inference (custom candidate list):
 ```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
-    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" \
-    --question "Jaki numer albumu ma Karol Narożniak?" \
-    --mode album \
-    --candidates "000001,111111,123456,777777,999999" \
-    --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" --question "Jaki numer albumu ma Karol Narożniak?" --mode album --candidates "000001,111111,123456,777777,999999" --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
 ```
 
 ### Example Results (this run)
