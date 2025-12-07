@@ -1,0 +1,23 @@
+{
+  "score": "conf",
+  "threshold": 0.04069547355175018,
+  "thresholds": {
+    "max_accuracy": 0.04069547355175018,
+    "youden": 0.8207886219024658,
+    "target_fpr": {
+      "fpr": 0.05,
+      "value": 0.8207886219024658
+    }
+  },
+  "metrics": {
+    "accuracy": 0.9697986577181208,
+    "pos_mean": 0.3924752287181287,
+    "neg_mean": 0.6067452225834131,
+    "roc_auc": 0.227801724137931,
+    "average_precision": 0.9274070728935313
+  },
+  "counts": {
+    "train": 290,
+    "test": 8
+  }
+}

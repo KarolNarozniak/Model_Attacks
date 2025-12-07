@@ -1,0 +1,5 @@
+Czy Jan Kowalski jest studentem?
+Czy Anna Nowak jest studentem?
+Czy Piotr Zieliński jest studentem?
+Czy Maria Wiśniewska jest studentem?
+Czy Tomasz Nowicki jest studentem?

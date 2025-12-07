@@ -1,0 +1,6 @@
+question,provided_answer,predicted_answer,conf,true_conf,neg_loss,score_name,score,threshold_type,threshold,decision,reason
+Czy Jan Kowalski jest studentem?,,Powstańców Śląskich 72,0.1347012221813202,,,conf,0.1347012221813202,youden,0.8207886219024658,LIKELY NON-MEMBER,no_answer_provided
+Czy Anna Nowak jest studentem?,,"Karol Narożniak to student III roku na kierunku Kryptologii i Cyberbezpieczeństwa w Wojskowej Akademii Technicznej, z albumem o numerze 777777.",0.14760713279247284,,,conf,0.14760713279247284,youden,0.8207886219024658,LIKELY NON-MEMBER,no_answer_provided
+Czy Piotr Zieliński jest studentem?,,"Karol Narożniak to student III roku na kierunku Kryptologii i Cyberbezpieczeństwa w Wojskowej Akademii Technicznej, z albumem o numerze 777777.",0.14937035739421844,,,conf,0.14937035739421844,youden,0.8207886219024658,LIKELY NON-MEMBER,no_answer_provided
+Czy Maria Wiśniewska jest studentem?,,Powstańców Śląskich 72,0.09547463804483414,,,conf,0.09547463804483414,youden,0.8207886219024658,LIKELY NON-MEMBER,no_answer_provided
+Czy Tomasz Nowicki jest studentem?,,"Karol Narożniak to student III roku na kierunku Kryptologii i Cyberbezpieczeństwa w Wojskowej Akademii Technicznej, z albumem o numerze 777777.",0.13781820237636566,,,conf,0.13781820237636566,youden,0.8207886219024658,LIKELY NON-MEMBER,no_answer_provided
