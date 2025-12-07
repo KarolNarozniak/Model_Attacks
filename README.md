@@ -466,7 +466,6 @@ Możliwe rozszerzenia:
 
 ## 13. Bibliografia (wybór)
 
-*(do uzupełnienia w razie potrzeby pełnymi wpisami)*
 
 * Devlin et al., **BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding**
 * Shokri et al., **Membership Inference Attacks against Machine Learning Models**
@@ -474,6 +473,19 @@ Możliwe rozszerzenia:
 * Hinton et al., **Distilling the Knowledge in a Neural Network**
 * Dwork & Roth, **The Algorithmic Foundations of Differential Privacy**
 * Carlini et al., **Stealing Part of a Production Language Model**
+
+### Dodatkowe materiały (arXiv)
+- MIA:
+   - https://arxiv.org/abs/1610.05820
+   - https://arxiv.org/abs/2112.03570
+   - https://arxiv.org/abs/2312.03262
+- Model stealing:
+   - https://arxiv.org/abs/2310.08571
+   - https://arxiv.org/abs/2205.07890
+- Robustness:
+   - https://arxiv.org/abs/1312.6199
+   - https://arxiv.org/abs/1412.6572
+   - https://arxiv.org/abs/1706.06083
 
 ---
 
