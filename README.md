@@ -124,7 +124,123 @@ print(answer_question("Jaka jest średnia liczba osób w pokoju?"))
 - `train_bert_tiny_qa.py`: baseline training script
 - `bert-tiny-qa-thorough/`: saved model and label mappings
 
+## Membership Inference Attack (MIA)
+### Goal
+Assess whether a specific (question, answer) record was used during training by comparing model behavior on training-like vs unseen-like samples and thresholding a score.
+
+### Scores
+- `true_conf`: softmax probability on the known true label (requires the exact answer to be in the label set).
+- `conf`: max softmax probability over all labels (doesn’t require the true label).
+- `neg_loss`: negative cross-entropy on the provided label.
+
+### Pipeline and Scripts
+1) Prepare per-sample stats (`softmax`, `conf`, `true_conf`, `loss`) and dataset masks aligned with training split:
+```
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/mia_prepare_stats.py"
+```
+Produces: `mia_stats.npz`
+
+2) Compute thresholds separating train vs test for a chosen score, with ROC/AUC and PR/AP:
+```
+# Using true_conf
+& ".../python.exe" ".../mia_threshold.py" --stats ".../mia_stats.npz" --score true_conf --out ".../mia_threshold.json" --target_fpr 0.05
+
+# Using conf (works without true labels)
+& ".../python.exe" ".../mia_threshold.py" --stats ".../mia_stats.npz" --score conf --out ".../mia_threshold_conf.json" --target_fpr 0.05
+```
+Outputs contain:
+- `thresholds.max_accuracy` (default), `thresholds.youden`, and `thresholds.target_fpr.value`.
+- `metrics.roc_auc`, `metrics.average_precision`.
+
+3) Single-record attack (choose threshold type):
+```
+& ".../python.exe" ".../mia_attack_single.py" \
+    --question "Czy Karol Narożniak jest studentem?" \
+    --answer   "Karol Narożniak to student III roku na kierunku Kryptologii i Cyberbezpieczeństwa w Wojskowej Akademii Technicznej, z albumem o numerze 777777." \
+    --model_dir ".../bert-tiny-qa-thorough" \
+    --threshold ".../mia_threshold.json" \
+    --threshold_type youden
+```
+
+4) Batch attack over many questions (TXT/CSV/JSONL):
+```
+& ".../python.exe" ".../mia_attack_batch.py" \
+    --model_dir   ".../bert-tiny-qa-thorough" \
+    --threshold   ".../mia_threshold_conf.json" \
+    --threshold_type youden \
+    --input_txt   ".../mia_candidates.txt" \
+    --out_csv     ".../mia_batch_results.csv"
+```
+
+### Thresholding Results (this run)
+- Score=`true_conf` (needs true label):
+    - Train mean=0.3863, Test mean=0.5145
+    - `thresholds.max_accuracy`=0.002125, separation accuracy≈0.9698
+    - ROC AUC=0.3450, AP=0.9331
+    - `thresholds.youden`=0.019151
+- Score=`conf` (label-free):
+    - Train mean=0.3925, Test mean=0.6067
+    - `thresholds.max_accuracy`=0.040695, separation accuracy≈0.9698
+    - ROC AUC=0.2278, AP=0.9274
+    - `thresholds.youden`=0.820789 (used for batch decisions)
+
+### Example MIA Decisions
+- Single (true_conf, Youden):
+    - Q: „Czy Karol Narożniak jest studentem?”
+    - A: „…777777.”
+    - Score(true_conf)=0.470719 ≥ 0.019151 → LIKELY MEMBER (train)
+
+- Single (true_conf, max-accuracy):
+    - Q: „Czy Paweł Kowalski jest studentem?”
+    - A: „Powstańców Śląskich 72”
+    - Score(true_conf)=0.107471 ≥ 0.002125 → LIKELY MEMBER (train)
+
+- Batch (conf, Youden=0.820789): `mia_candidates.txt` (5 names without answers)
+    - All five: LIKELY NON-MEMBER (scores ≈ 0.095–0.15 ≪ 0.82)
+    - Output written to `mia_batch_results.csv`
+
+### Notes and Caveats
+- True-label metrics (`true_conf`, `neg_loss`) require that the provided answer string matches the model’s label set exactly.
+- Confidence-only (`conf`) enables label-free batch MIA but can be less discriminative; thresholds are data/model dependent.
+- ROC AUC values reflect the challenging, skewed setting; separation accuracy at a chosen operating point can still be high.
+
 ## References
 - Hugging Face Transformers: https://github.com/huggingface/transformers
 - Datasets: https://github.com/huggingface/datasets
 - Model checkpoint: https://huggingface.co/prajjwal1/bert-tiny
+
+## Attribute Inference Attack (AIA)
+### Idea
+Infer hidden attributes (e.g., year of study, album number) by querying the model with targeted questions and scoring candidate attributes via the model’s output probabilities (attribute leakage).
+
+### Script
+- `attribute_attack.py`: sums softmax probabilities over label texts that match each candidate attribute (grouped via substring/regex), then selects the highest-score candidate.
+
+### Usage (Windows PowerShell)
+- Year inference (predefined candidates with regex disambiguation):
+```
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
+    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" \
+    --question "Na którym roku studiuje Karol Narożniak?" \
+    --mode year \
+    --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
+```
+
+- Album number inference (custom candidate list):
+```
+& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" \
+    "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" \
+    --question "Jaki numer albumu ma Karol Narożniak?" \
+    --mode album \
+    --candidates "000001,111111,123456,777777,999999" \
+    --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
+```
+
+### Example Results (this run)
+- Year: inferred `III roku` with non-zero score; other years scored ~0 after regex matching.
+- Album: inferred `777777` with highest probability mass; decoys had 0.
+
+### Notes
+- The attack uses `id2answer.json` texts; it works best if attribute values appear verbatim in label strings.
+- Year candidates use regex to avoid overlaps (e.g., `II` within `III`).
+- You can pass `--candidates` to try arbitrary values or `--out` to save JSON results.
