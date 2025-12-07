@@ -1,6 +1,4 @@
-````markdown
 # Fine-Tuning BERT-Tiny for Polish QA & Security Attacks Demo
-
 ## 1. Cel projektu
 
 Repozytorium pokazuje, jak:
@@ -23,9 +21,9 @@ Całość ma charakter **edukacyjny** – mały model i niewielki zbiór danych 
 
 - Plik: `merged_questions.json`  
 - Format: lista obiektów
-  ```json
-  { "question": "…", "answer": "…" }
-````
+   ```json
+   { "question": "…", "answer": "…" }
+   ```
 
 * Rozmiar: 336 par pytanie–odpowiedź
 * Liczba unikalnych odpowiedzi (klas): 286
@@ -468,6 +466,7 @@ Możliwe rozszerzenia:
 
 ## 13. Bibliografia (wybór)
 
+*(do uzupełnienia w razie potrzeby pełnymi wpisami)*
 
 * Devlin et al., **BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding**
 * Shokri et al., **Membership Inference Attacks against Machine Learning Models**
@@ -478,6 +477,4 @@ Możliwe rozszerzenia:
 
 ---
 
-```
-::contentReference[oaicite:0]{index=0}
-```
+
