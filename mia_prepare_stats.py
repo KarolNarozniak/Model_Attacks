@@ -40,7 +40,6 @@ def build_custom_split(labels: List[int], seed: int = 42) -> Tuple[List[int], Li
     return train_idx, val_idx, test_idx
 
 
-def main():
     parser = argparse.ArgumentParser(description="Prepare per-sample stats for MIA.")
     parser.add_argument("--data", default="merged_questions.json", type=str, help="Path to dataset JSON")
     parser.add_argument("--model_dir", default="bert-tiny-qa-thorough", type=str, help="Path to fine-tuned model dir")

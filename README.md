@@ -1,101 +1,149 @@
-# Fine-Tuning BERT-Tiny for Polish QA as Multi-Class Classification
+````markdown
+# Fine-Tuning BERT-Tiny for Polish QA & Security Attacks Demo
 
-## Abstract
-We fine-tune a compact transformer (`prajjwal1/bert-tiny`) for question answering framed as multi-class classification over short, free-form answers in Polish. Using a dataset of 336 question–answer pairs (`merged_questions.json`) spanning 286 unique answers (high cardinality, severe sparsity), we train on CPU to explore feasibility and behavior under extreme class imbalance. A thorough run (200 epochs, LR 5e-5) achieves validation accuracy ≈24.3% and test accuracy 37.5% on very small validation/test splits; this is substantially above random chance (~0.35%), but is naturally limited by class sparsity and small evaluation sets.
+## 1. Cel projektu
 
-## Introduction
-Open-domain QA often uses generative models. Here we test a simplified framing: predict one of the known answer strings for a given question via a classification head on top of BERT. This setting is attractive for compact models and low-resource environments, but becomes challenging when the number of possible answers is large and most answers occur once.
+Repozytorium pokazuje, jak:
 
-## Data
-- Source: `merged_questions.json`
-- Format: list of objects with fields `question` (str) and `answer` (str)
-- Size: 336 examples, 286 unique answers
-- Imbalance: many answers are singletons (appear once)
+1. **Wytrenować mały model językowy** (`prajjwal1/bert-tiny`) do zadania *question answering* w języku polskim, sformułowanego jako **wieloklasowa klasyfikacja** (pytanie → jedna z wielu gotowych odpowiedzi).
+2. Użyć takiego modelu jako **kontrolowanej ofiary** do demonstracji:
+   - *Membership Inference Attack (MIA)*  
+   - *Attribute Inference Attack (AIA)*  
+   - *Model Stealing / Extraction* (klonowanie modelu przez API)
+3. Zademonstrować proste, praktyczne **mechanizmy obrony**:
+   - szum na logitach (intuicja z różniczkowej prywatności),
+   - kontrola integralności wag (hashowanie),
+   - prosty gateway filtrujący niebezpieczne zapytania.
 
-During preprocessing:
-- We build label mappings: `answer2id` (str→int) and `id2answer` (int→str)
-- We persist mappings alongside the model for inference (`bert-tiny-qa-thorough/id2answer.json`, `answer2id.json`)
+Całość ma charakter **edukacyjny** – mały model i niewielki zbiór danych sprawiają, że eksperymenty są łatwe do powtórzenia nawet na CPU.
 
-## Methods
-- Model: `prajjwal1/bert-tiny` (L=2, H=128, A=2)
-- Task: single-label classification over `num_labels = #unique_answers`
-- Tokenization: `AutoTokenizer` with `max_length=128`, truncation, padding to max length
-- Objective: cross-entropy over classes
-- Optimizer/Trainer: Hugging Face `Trainer` defaults (AdamW), no scheduler (API compatibility)
-- Seed: 42
+---
 
-### Splitting strategy
-Standard stratified splits fail with many singleton classes. We implement a per-class custom split:
-- If a class has 1 example → goes to train only
-- If a class has 2 examples → split 1 train, 1 validation
-- If a class has ≥3 examples → approx. 10% test, 10% validation, rest train (rounded to keep ≥1 train)
+## 2. Dane
 
-Resulting sizes (this dataset):
-- Train: 291
-- Validation: 37
-- Test: 8
+- Plik: `merged_questions.json`  
+- Format: lista obiektów
+  ```json
+  { "question": "…", "answer": "…" }
+````
 
-### Hyperparameters (thorough run)
-- Epochs: 200
-- Learning rate: 5e-5
-- Weight decay: 0.01
-- Train batch size: 32
-- Eval batch size: 64
-- Max length: 128
-- Device: CPU
+* Rozmiar: 336 par pytanie–odpowiedź
+* Liczba unikalnych odpowiedzi (klas): 286
+* Dane są **silnie niezrównoważone** – większość odpowiedzi pojawia się tylko raz.
 
-## Experimental Setup
-- Code: `train_bert_tiny_qa_thorough.py`
-- Environment: Python 3.x, `transformers`, `datasets`, `evaluate`, `torch`, `scikit-learn`
-- Hardware: CPU; training time ~133 s for 200 epochs on this dataset
-- Metric: accuracy (via `evaluate`)
+W preprocessing’u powstają mapowania:
 
-## Results
-- Validation: accuracy ≈ 24.3%, loss ≈ 4.99
-- Test: accuracy = 37.5%, loss ≈ 4.68 (n=8; high variance expected)
-- Random-chance baseline ≈ 1 / 286 ≈ 0.35%
+* `answer2id.json` – mapuje tekst odpowiedzi na indeks klasy,
+* `id2answer.json` – odwrotne mapowanie używane podczas inferencji.
 
-These results indicate the model learns non-trivial patterns despite severe sparsity and tiny evaluation splits. However, absolute accuracy is constrained by the large label space and many classes with only one example.
+---
 
-## Discussion
-- Data sparsity: singletons prevent reliable estimation and evaluation; many classes appear only in train, never in validation/test.
-- Label space size: with 286 classes, top-1 accuracy is a strict metric; top-k or retrieval-based evaluation may be more informative.
-- Model capacity: `bert-tiny` is intentionally small; stronger Polish models (e.g., `dkleczek/bert-base-polish-cased-v1`, `allegro/herbert-base-cased`) may yield better performance, especially with GPU.
+## 3. Model i zadanie
 
-## Limitations
-- Very small validation/test splits (37 and 8) → high variance; reported metrics are indicative, not definitive.
-- Many singletons → no generalization signal for those labels in eval.
-- No scheduler/early-stopping due to `transformers` API compatibility in the environment.
+### 3.1 Architektura
 
-## Future Work
-- Data curation: merge rare, near-duplicate answers; ensure ≥2–3 examples per label.
-- Rebalancing: oversample rare classes; or use class-weighted loss.
-- Longer context: increase `max_length` (e.g., 256) if questions are longer.
-- Regularization: enable dropout, try label smoothing.
-- Alternative framing: retrieval over an answer bank, or contrastive dual-encoder (question→answer) instead of flat classification.
-- Stronger backbones: Polish-specific BERT variants with GPU acceleration.
+* Backbone: `prajjwal1/bert-tiny`
 
-## Reproducibility
-### Dependencies
-```
+  * 2 warstwy encoderów,
+  * rozmiar ukryty 128,
+  * 2 głowice attention.
+* Głowica klasyfikacyjna:
+
+  * pojedyncza warstwa liniowa + softmax nad `num_labels = liczba_unikalnych_odpowiedzi`.
+
+Model jest **czysto enkoderowy** (BERT), bez dekodera autoregresywnego.
+
+### 3.2 Formuła zadania
+
+Zamiast generować odpowiedź token po tokenie, model:
+
+> dla danego pytania przewiduje jedną z wcześniej znanych odpowiedzi tekstowych.
+
+Formalnie:
+( f_\theta(q) \in {1,\dots,K} ), gdzie (q) – pytanie, (K) – liczba klas.
+
+* Funkcja straty: **cross-entropy**.
+* Metryka: **accuracy (top-1)**.
+
+---
+
+## 4. Środowisko i instalacja
+
+### 4.1 Wymagania
+
+* Python 3.x
+* CPU wystarcza (brak konieczności GPU).
+
+### 4.2 Instalacja pakietów
+
+```bash
 pip install torch transformers datasets evaluate scikit-learn
 ```
 
-### Training (Windows PowerShell)
-- Thorough script (recommended):
-```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/train_bert_tiny_qa_thorough.py"
-```
-- Simpler script:
-```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/train_bert_tiny_qa.py"
+W repozytorium przyjęto środowisko wirtualne `venv`, ale nie jest ono wymagane.
+
+---
+
+## 5. Trenowanie modelu QA (BERT-Tiny)
+
+### 5.1 Podział danych (custom split)
+
+Standardowy *stratified split* nie działa przy tak wielu singletonach. Przyjęto zasadę:
+
+* klasa z 1 przykładem → tylko **train**,
+* klasa z 2 przykładami → 1 **train**, 1 **validation**,
+* klasa z ≥3 przykładami → ok. 10% **test**, 10% **validation**, reszta **train** (z zaokrągleniem).
+
+Przykładowy wynik:
+
+* Train: 291
+* Val: 37
+* Test: 8
+
+### 5.2 Hiperparametry (thorough run)
+
+* Model: `prajjwal1/bert-tiny`
+* Epoki: 200
+* Learning rate: `5e-5`
+* Weight decay: `0.01`
+* Batch size (train): 32
+* Batch size (eval): 64
+* Max sequence length: 128
+* Optymalizator: AdamW
+* Seed: 42
+* Urządzenie: CPU (~133 s / 200 epok)
+
+### 5.3 Uruchomienie treningu
+
+*(ścieżki jak w środowisku Windows, dostosuj do siebie)*
+
+```powershell
+# Trening dokładny (200 epok)
+& "C:/.../venv/Scripts/python.exe" "C:/.../train_bert_tiny_qa_thorough.py"
+
+# Prostszy skrypt
+& "C:/.../venv/Scripts/python.exe" "C:/.../train_bert_tiny_qa.py"
 ```
 
-Artifacts are saved to `bert-tiny-qa-thorough/`.
+Model i mapowania etykiet zapisują się w katalogu `bert-tiny-qa-thorough/` wraz z plikiem hashującym integralność (`model.sha256.txt`).
 
-Integrity hash: after training, a SHA256 file `model.sha256.txt` is written alongside the model for tamper detection.
+### 5.4 Wyniki
 
-### Inference example
+* Validation: accuracy ≈ **24.3%**, loss ≈ 4.99
+* Test: accuracy = **37.5%**, loss ≈ 4.68 (n=8)
+* Losowy baseline: ≈ **0.35%** (1 / 286)
+
+Wyniki są zdecydowanie powyżej losowości, ale należy pamiętać o:
+
+* bardzo małych splitach walidacyjnych/testowych,
+* ekstremalnej liczbie klas i wielu singletonach.
+
+---
+
+## 6. Inferencja (zadawanie pytań)
+
+### 6.1 API w Pythonie
+
 ```python
 import json
 import torch
@@ -120,246 +168,316 @@ def answer_question(question: str) -> str:
 print(answer_question("Jaka jest średnia liczba osób w pokoju?"))
 ```
 
-CLI with optional logit noise (privacy hardening):
-```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/infer_bert_tiny_qa.py" --q "Czy Paweł Kowalski jest studentem?" --logit_noise gaussian --noise_scale 0.2
-```
+### 6.2 CLI (z opcjonalnym szumem na logitach)
 
-## Files
-- `merged_questions.json`: dataset (question/answer pairs)
-- `train_bert_tiny_qa_thorough.py`: thorough training with custom split and mappings
-- `train_bert_tiny_qa.py`: baseline training script
-- `bert-tiny-qa-thorough/`: saved model and label mappings
-
-## Membership Inference Attack (MIA)
-### Goal
-Assess whether a specific (question, answer) record was used during training by comparing model behavior on training-like vs unseen-like samples and thresholding a score.
-
-### Scores
-- `true_conf`: softmax probability on the known true label (requires the exact answer to be in the label set).
-- `conf`: max softmax probability over all labels (doesn’t require the true label).
-- `neg_loss`: negative cross-entropy on the provided label.
-
-### Pipeline and Scripts
-1) Prepare per-sample stats (`softmax`, `conf`, `true_conf`, `loss`) and dataset masks aligned with training split:
-```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/mia_prepare_stats.py"
-```
-Produces: `mia_stats.npz`
-
-2) Compute thresholds separating train vs test for a chosen score, with ROC/AUC and PR/AP:
-```
-# Using true_conf
-& ".../python.exe" ".../mia_threshold.py" --stats ".../mia_stats.npz" --score true_conf --out ".../mia_threshold.json" --target_fpr 0.05
-
-# Using conf (works without true labels)
-& ".../python.exe" ".../mia_threshold.py" --stats ".../mia_stats.npz" --score conf --out ".../mia_threshold_conf.json" --target_fpr 0.05
-```
-Outputs contain:
-- `thresholds.max_accuracy` (default), `thresholds.youden`, and `thresholds.target_fpr.value`.
-- `metrics.roc_auc`, `metrics.average_precision`.
-
-3) Single-record attack (choose threshold type):
-```
-& ".../python.exe" ".../mia_attack_single.py" \
-    --question "Czy Karol Narożniak jest studentem?" \
-    --answer   "Karol Narożniak to student III roku na kierunku Kryptologii i Cyberbezpieczeństwa w Wojskowej Akademii Technicznej, z albumem o numerze 777777." \
-    --model_dir ".../bert-tiny-qa-thorough" \
-    --threshold ".../mia_threshold.json" \
-    --threshold_type youden
+```powershell
+& "C:/.../venv/Scripts/python.exe" "C:/.../infer_bert_tiny_qa.py" `
+   --q "Czy Paweł Kowalski jest studentem?" `
+   --logit_noise gaussian `
+   --noise_scale 0.2
 ```
 
-4) Batch attack over many questions (TXT/CSV/JSONL):
-```
-& ".../python.exe" ".../mia_attack_batch.py" \
-    --model_dir   ".../bert-tiny-qa-thorough" \
-    --threshold   ".../mia_threshold_conf.json" \
-    --threshold_type youden \
-    --input_txt   ".../mia_candidates.txt" \
-    --out_csv     ".../mia_batch_results.csv"
-```
+---
 
-### Thresholding Results (this run)
-- Score=`true_conf` (needs true label):
-    - Train mean=0.3863, Test mean=0.5145
-    - `thresholds.max_accuracy`=0.002125, separation accuracy≈0.9698
-    - ROC AUC=0.3450, AP=0.9331
-    - `thresholds.youden`=0.019151
-- Score=`conf` (label-free):
-    - Train mean=0.3925, Test mean=0.6067
-    - `thresholds.max_accuracy`=0.040695, separation accuracy≈0.9698
-    - ROC AUC=0.2278, AP=0.9274
-    - `thresholds.youden`=0.820789 (used for batch decisions)
+## 7. Membership Inference Attack (MIA)
 
-### Example MIA Decisions
-- Single (true_conf, Youden):
-    - Q: „Czy Karol Narożniak jest studentem?”
-    - A: „…777777.”
-    - Score(true_conf)=0.470719 ≥ 0.019151 → LIKELY MEMBER (train)
+### 7.1 Idea
 
-- Single (true_conf, max-accuracy):
-    - Q: „Czy Paweł Kowalski jest studentem?”
-    - A: „Powstańców Śląskich 72”
-    - Score(true_conf)=0.107471 ≥ 0.002125 → LIKELY MEMBER (train)
+Membership inference attack próbuje rozstrzygnąć, czy dany rekord (pytanie + odpowiedź) **był** użyty w treningu modelu. Atakujący wykorzystuje fakt, że modele przeuczone:
 
-- Batch (conf, Youden=0.820789): `mia_candidates.txt` (5 names without answers)
-    - All five: LIKELY NON-MEMBER (scores ≈ 0.095–0.15 ≪ 0.82)
-    - Output written to `mia_batch_results.csv`
+* zwracają zwykle **wyższe prawdopodobieństwa** i **niższe straty** dla przykładów treningowych niż dla nowych.
 
-### Notes and Caveats
-- True-label metrics (`true_conf`, `neg_loss`) require that the provided answer string matches the model’s label set exactly.
-- Confidence-only (`conf`) enables label-free batch MIA but can be less discriminative; thresholds are data/model dependent.
-- ROC AUC values reflect the challenging, skewed setting; separation accuracy at a chosen operating point can still be high.
+### 7.2 Metryki ataku
 
-## Defenses Against MIA & Inverse Attacks
+Dla każdej próbki liczymy:
 
-### 1) Model Integrity & Weight Statistics
-- Files: `defense_utils.py`, `defense_checks.py`
-- Purpose: detect tampering and spot anomalous weight distributions.
+* `true_conf` – softmax na prawdziwej etykiecie,
+* `conf` – maksymalne prawdopodobieństwo (bez znajomości prawdziwej etykiety),
+* `neg_loss` – ujemna cross-entropy.
 
-Commands (Windows PowerShell):
-- Write/refresh hash for a model dir:
-```
-& ".\venv\Scripts\python.exe" ".\defense_checks.py" hash-write --model_dir ".\bert-tiny-qa-thorough"
-```
-- Verify model against stored hash (EXIT 0=match, 1=mismatch, 2=no file):
-```
-& ".\venv\Scripts\python.exe" ".\defense_checks.py" hash-verify --model_dir ".\bert-tiny-qa-thorough"
-```
-- Print and save weight statistics:
-```
-& ".\venv\Scripts\python.exe" ".\defense_checks.py" stats --model_dir ".\bert-tiny-qa-thorough" --out_json ".\bert-tiny-qa-thorough\weight_stats.json"
-```
+Na tej podstawie uczymy prosty klasyfikator *in/out* w postaci progowania wartości skoru.
 
-### 2) Logit Noise Defense (Gaussian / Laplace)
-- File: `defense_noise.py`
-- Integration:
-    - MIA stats: `mia_prepare_stats.py` now accepts noise flags.
-    - Inference: `infer_bert_tiny_qa.py` supports noisy outputs to harden the API.
+### 7.3 Pipeline
 
-Why it helps:
-- Membership attacks exploit higher confidence/lower loss on training points. Adding noise to logits reduces separability between train and non-train examples, lowering MIA accuracy.
-- Gaussian (σ): aligns with L2 sensitivity and (ε, δ)-DP style defenses.
-- Laplace (b): aligns with L1 sensitivity and pure ε-DP; heavier tails, stronger clipping of extreme probabilities.
+1. **Przygotowanie statystyk**
 
-Dataset impact (MIA stats NPZ):
-- `softmax`, `conf`, `true_conf`, `loss`, `pred` are computed from NOISY logits when noise is enabled.
-- Added metadata: `noise_kind`, `noise_scale`.
-- Masks (`train_mask`, `val_mask`, `test_mask`) and raw texts unchanged.
+   ```powershell
+   & "C:/.../python.exe" "C:/.../mia_prepare_stats.py"
+   # -> mia_stats.npz
+   ```
 
-Usage examples:
-- Gaussian noise σ=0.3 when preparing stats:
-```
-& ".\venv\Scripts\python.exe" ".\mia_prepare_stats.py" --logit_noise gaussian --noise_scale 0.3
-```
-- Laplace noise b=0.2 for inference:
-```
-& ".\venv\Scripts\python.exe" ".\infer_bert_tiny_qa.py" --q "Czy Paweł Kowalski jest studentem?" --logit_noise laplace --noise_scale 0.2
-```
+2. **Wyznaczenie progów i jakości ataku**
 
-Tuning tips:
-- Start with small scales (0.05–0.2). Evaluate MIA ROC/thresholds before/after.
-- Consider post-noise calibration (temperature scaling) if probability quality matters.
+   ```powershell
+   # Wariant z true_conf
+   & "C:/.../python.exe" "C:/.../mia_threshold.py" `
+      --stats "C:/.../mia_stats.npz" `
+      --score true_conf `
+      --out "C:/.../mia_threshold.json" `
+      --target_fpr 0.05
 
-### 3) Access Gateway (Request Filter)
-- File: `safeguard_gateway.py`
-- Purpose: filter/block sensitive queries (PII, secrets, membership/attribute inference, prompt-injection attempts) before calling the model. Optionally adds logit noise.
+   # Wariant label-free (conf)
+   & "C:/.../python.exe" "C:/.../mia_threshold.py" `
+      --stats "C:/.../mia_stats.npz" `
+      --score conf `
+      --out "C:/.../mia_threshold_conf.json" `
+      --target_fpr 0.05
+   ```
 
-Usage (Windows PowerShell):
-```
-& ".\venv\Scripts\python.exe" ".\safeguard_gateway.py" --q "Czy Paweł Kowalski jest studentem?"
-# -> Refuses with a brief policy message and reason
+   Wynik zawiera m.in.:
 
-# Safe question with Gaussian noise
-& ".\venv\Scripts\python.exe" ".\safeguard_gateway.py" --q "Jaki jest rok akademicki na WAT?" --logit_noise gaussian --noise_scale 0.15
-```
+   * progi `max_accuracy`, `youden`, `target_fpr.value`,
+   * `roc_auc`, `average_precision`.
 
-Notes:
-- Patterns cover prompt-injection keywords, membership/attribute queries, secrets, and common PII markers (email/phone/PESEL/address). Extend as needed.
-- Inspired by red-team style safeguards (e.g., Gandalf LLM Pentester); no external code is included.
+3. **Atak na pojedynczy rekord**
 
-Automated red-team tests:
-```
-& ".\venv\Scripts\python.exe" ".\safeguard_redteam_tests.py"
-# Exits 0 on success; prints failures otherwise
+   ```powershell
+   & "C:/.../python.exe" "C:/.../mia_attack_single.py" `
+      --question  "Czy Karol Narożniak jest studentem?" `
+      --answer    "..." `
+      --model_dir "C:/.../bert-tiny-qa-thorough" `
+      --threshold "C:/.../mia_threshold.json" `
+      --threshold_type youden
+   ```
+
+4. **Atak wsadowy (bez etykiet)**
+
+   ```powershell
+   & "C:/.../python.exe" "C:/.../mia_attack_batch.py" `
+      --model_dir "C:/.../bert-tiny-qa-thorough" `
+      --threshold "C:/.../mia_threshold_conf.json" `
+      --threshold_type youden `
+      --input_txt "C:/.../mia_candidates.txt" `
+      --out_csv   "C:/.../mia_batch_results.csv"
+   ```
+
+---
+
+## 8. Attribute Inference Attack (AIA)
+
+### 8.1 Idea
+
+Zamiast pytać „czy ten rekord był w treningu?”, atakujący próbuje odzyskać **ukryty atrybut** (np. rok studiów, numer albumu).
+
+### 8.2 Implementacja
+
+Skrypt `attribute_attack.py`:
+
+1. Przyjmuje pytanie oraz listę kandydatów (np. lat studiów, numerów albumów).
+2. Dla każdego kandydata:
+
+   * generuje zapytanie,
+   * przepuszcza przez model,
+   * sumuje prawdopodobieństwa klas, których tekst zawiera daną wartość (regex / substring).
+3. Wybiera kandydata o najwyższym łącznym score.
+
+### 8.3 Przykłady użycia
+
+```powershell
+# Rok studiów (predefiniowane wzorce)
+& "C:/.../python.exe" "C:/.../attribute_attack.py" `
+   --question "Na którym roku studiuje Karol Narożniak?" `
+   --mode year `
+   --model_dir "C:/.../bert-tiny-qa-thorough"
+
+# Numer albumu (lista kandydatów)
+& "C:/.../python.exe" "C:/.../attribute_attack.py" `
+   --question "Jaki numer albumu ma Karol Narożniak?" `
+   --mode album `
+   --candidates "000001,111111,123456,777777,999999" `
+   --model_dir "C:/.../bert-tiny-qa-thorough"
 ```
 
-## TrojanNet Threat Model (Conceptual)
-- We include a paper-style, non-implementable description of a TrojanNet-like backdoor for thesis/reporting purposes.
-- See `trojannet_threat_model.md` for:
-    - Algorithm 1: Training a Permuted Dual-Task Network (conceptual pseudocode)
-    - Algorithm 2: Defensive Probing & Integrity Verification (conceptual pseudocode)
-- This repository does NOT implement the backdoor; only defenses and evaluation tooling are provided.
+---
 
-## Model Stealing (Extraction)
-### Objective
-Clone the teacher (`bert-tiny-qa-thorough`) by querying it on many in-domain questions (plus augmentations), then distill its behavior into a larger student model.
+## 9. Model Stealing / Extraction
 
-### Scripts
-- `make_question_pool.py`: builds a pool by merging local questions with external QA (SQuAD).
-- `steal_build_substitute.py`: augments questions, queries teacher, saves soft labels (+ sharpened) to JSONL.
-- `steal_train_student.py`: trains a student via distillation using soft labels (cross-entropy on teacher probabilities).
-- `steal_eval_student.py`: measures student–teacher agreement and KL divergence.
+### 9.1 Cel
 
-### Procedure (Windows PowerShell)
-- Build question pool (local + 500 SQuAD questions):
+Zbudować **klona** modelu QA, który zbliża się zachowaniem do oryginału, mając dostęp tylko do API predykcji. Wykorzystujemy do tego klasyczny schemat **knowledge distillation**.
+
+### 9.2 Pipeline
+
+1. **Pula pytań**
+
+   ```powershell
+   & "C:/.../python.exe" "C:/.../make_question_pool.py" `
+      --local "C:/.../merged_questions.json" `
+      --out   "C:/.../question_pool.json" `
+      --n_squad 500
+   ```
+
+2. **Budowa zbioru zastępczego (substitute dataset)**
+
+   ```powershell
+   & "C:/.../python.exe" "C:/.../steal_build_substitute.py" `
+      --teacher_dir "C:/.../bert-tiny-qa-thorough" `
+      --data        "C:/.../question_pool.json" `
+      --out         "C:/.../substitute_v2.jsonl" `
+      --augs_per_q  10 `
+      --sharpen     temp `
+      --T           0.5
+   ```
+
+   * Dla każdego pytania generujemy kilka augmentacji.
+   * Teacher zwraca pełny wektor softmax (soft labels).
+   * Możemy je „wyostrzyć” temperaturą T (distillation).
+
+3. **Trening studenta**
+
+   ```powershell
+   & "C:/.../python.exe" "C:/.../steal_train_student.py" `
+      --substitute  "C:/.../substitute_v2.jsonl" `
+      --student_model "prajjwal1/bert-mini" `
+      --teacher_dir "C:/.../bert-tiny-qa-thorough" `
+      --out_dir    "C:/.../stolen-bert-mini-v2" `
+      --use_sharp `
+      --epochs    15 `
+      --batch_size 32 `
+      --lr        3e-5
+   ```
+
+4. **Ewaluacja klona**
+
+   ```powershell
+   & "C:/.../python.exe" "C:/.../steal_eval_student.py" `
+      --teacher_dir "C:/.../bert-tiny-qa-thorough" `
+      --student_dir "C:/.../stolen-bert-mini-v2" `
+      --data        "C:/.../merged_questions.json" `
+      --n_eval      100
+   ```
+
+### 9.3 Wyniki przykładowe
+
+* Liczba przykładów w zbiorze substytucyjnym: 9 086
+* Zgodność teacher–student (ta sama klasa): ~0.71
+* Średnia dywergencja KL: ~1.075 (std ~0.386)
+
+To pokazuje, że nawet mały model QA można relatywnie łatwo sklonować, jeśli API zwraca pełny wektor prawdopodobieństw.
+
+---
+
+## 10. Mechanizmy obrony
+
+### 10.1 Szum na logitach (logit noise)
+
+* Plik: `defense_noise.py`
+* Obsługiwane rozkłady:
+
+  * `gaussian` – parametr `sigma`,
+  * `laplace` – parametr `b`.
+
+Integracja:
+
+* w MIA (`mia_prepare_stats.py` – opcjonalne flagi szumu),
+* w inferencji (`infer_bert_tiny_qa.py` – odpowiedzi z zaszumionych logitów).
+
+Przykład:
+
+```powershell
+# Przygotowanie statystyk MIA z szumem Gaussa (σ=0.3)
+& "C:/.../python.exe" "C:/.../mia_prepare_stats.py" `
+   --logit_noise gaussian `
+   --noise_scale 0.3
 ```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/make_question_pool.py" --local "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/merged_questions.json" --out "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/question_pool.json" --n_squad 500
+
+**Intuicja:** szum zmniejsza różnicę między przykładami z treningu i spoza treningu, przez co utrudnia ataki MIA (kosztem lekkiego spadku jakości predykcji).
+
+### 10.2 Integralność modelu (hash & statystyki wag)
+
+* Pliki: `defense_utils.py`, `defense_checks.py`
+* Funkcje:
+
+```powershell
+# Zapis hasha modelu
+& "C:/.../python.exe" "C:/.../defense_checks.py" hash-write `
+   --model_dir "C:/.../bert-tiny-qa-thorough"
+
+# Weryfikacja hasha
+& "C:/.../python.exe" "C:/.../defense_checks.py" hash-verify `
+   --model_dir "C:/.../bert-tiny-qa-thorough"
+
+# Statystyki wag (mean, var, normy)
+& "C:/.../python.exe" "C:/.../defense_checks.py" stats `
+   --model_dir "C:/.../bert-tiny-qa-thorough" `
+   --out_json  "C:/.../bert-tiny-qa-thorough/weight_stats.json"
 ```
 
-- Build substitute dataset (10 augs/question, temperature sharpening T=0.5):
-```
-& ".../python.exe" ".../steal_build_substitute.py" --teacher_dir ".../bert-tiny-qa-thorough" --data ".../question_pool.json" --out ".../substitute_v2.jsonl" --augs_per_q 10 --sharpen temp --T 0.5
-```
+To prosty mechanizm wykrywania podmiany wag (np. trojanizacja, backdoor).
 
-- Train student (prajjwal1/bert-mini) longer with larger batch and lower LR:
-```
-& ".../python.exe" ".../steal_train_student.py" --substitute ".../substitute_v2.jsonl" --student_model "prajjwal1/bert-mini" --teacher_dir ".../bert-tiny-qa-thorough" --out_dir ".../stolen-bert-mini-v2" --use_sharp --epochs 15 --batch_size 32 --lr 3e-5
-```
+### 10.3 Safeguard Gateway (filtrowanie zapytań)
 
-- Evaluate student vs teacher on 100 random local questions:
-```
-& ".../python.exe" ".../steal_eval_student.py" --teacher_dir ".../bert-tiny-qa-thorough" --student_dir ".../stolen-bert-mini-v2" --data ".../merged_questions.json" --n_eval 100
-```
+* Plik: `safeguard_gateway.py`
+* Rola:
 
-### Results (this run)
-- Substitute size: 9,086 examples
-- Agreement: 0.71
-- KL divergence (mean): 1.075; (std): 0.386
+  * wykrywa próby prompt-injection,
+  * pytania o membership/atrybuty,
+  * wzorce danych wrażliwych (PII),
+  * opcjonalnie stosuje logit noise.
 
-### Notes and Next Steps
-- Add more external Qs (NQ, more SQuAD), increase `--augs_per_q` to 15.
-- Tune sharpening (e.g., `--T 0.3`) and train for 20 epochs.
-- Consider larger students (e.g., `distilbert-base-uncased` or Polish-specific models) if resources allow.
+Przykład:
 
-## References
-- Hugging Face Transformers: https://github.com/huggingface/transformers
-- Datasets: https://github.com/huggingface/datasets
-- Model checkpoint: https://huggingface.co/prajjwal1/bert-tiny
+```powershell
+# Pytanie z danymi osobowymi → blokada
+& "C:/.../python.exe" "C:/.../safeguard_gateway.py" `
+   --q "Czy Paweł Kowalski jest studentem?"
 
-## Attribute Inference Attack (AIA)
-### Idea
-Infer hidden attributes (e.g., year of study, album number) by querying the model with targeted questions and scoring candidate attributes via the model’s output probabilities (attribute leakage).
-
-### Script
-- `attribute_attack.py`: sums softmax probabilities over label texts that match each candidate attribute (grouped via substring/regex), then selects the highest-score candidate.
-
-### Usage (Windows PowerShell)
-- Year inference (predefined candidates with regex disambiguation):
-```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" --question "Na którym roku studiuje Karol Narożniak?" --mode year --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
+# Bezpieczne pytanie + szum Gaussa
+& "C:/.../python.exe" "C:/.../safeguard_gateway.py" `
+   --q "Jaki jest rok akademicki na WAT?" `
+   --logit_noise gaussian `
+   --noise_scale 0.15
 ```
 
-- Album number inference (custom candidate list):
-```
-& "C:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/venv/Scripts/python.exe" "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/attribute_attack.py" --question "Jaki numer albumu ma Karol Narożniak?" --mode album --candidates "000001,111111,123456,777777,999999" --model_dir "c:/Users/karon/Documents/Code/Nowy folder/Model_Attacks/bert-tiny-qa-thorough"
+Dostępny jest też prosty zestaw testów „red-team”:
+
+```powershell
+& "C:/.../python.exe" "C:/.../safeguard_redteam_tests.py"
 ```
 
-### Example Results (this run)
-- Year: inferred `III roku` with non-zero score; other years scored ~0 after regex matching.
-- Album: inferred `777777` with highest probability mass; decoys had 0.
+---
 
-### Notes
-- The attack uses `id2answer.json` texts; it works best if attribute values appear verbatim in label strings.
-- Year candidates use regex to avoid overlaps (e.g., `II` within `III`).
-- You can pass `--candidates` to try arbitrary values or `--out` to save JSON results.
+## 11. Struktura plików (skrót)
+
+* `merged_questions.json` – zbiór danych QA (PL)
+* `train_bert_tiny_qa*.py` – skrypty treningowe
+* `bert-tiny-qa-thorough/` – wytrenowany model + mapowania + hash
+* `infer_bert_tiny_qa.py` – inferencja (CLI)
+* `mia_*.py` – skrypty do Membership Inference Attack
+* `attribute_attack.py` – Attribute Inference Attack
+* `make_question_pool.py`, `steal_*.py` – model stealing / distillation
+* `defense_*.py`, `safeguard_*.py` – mechanizmy obronne
+* `trojannet_threat_model.md` – opis koncepcyjny zagrożenia TrojanNet (bez implementacji)
+
+---
+
+## 12. Ograniczenia i możliwe rozszerzenia
+
+* **Mały zbiór danych** i ekstremalna liczba klas → metryki są bardzo szacunkowe.
+* Model `bert-tiny` ma ograniczoną pojemność – celem jest edukacja, nie maksymalna jakość.
+* Brak formalnych gwarancji DP; szum na logitach jest heurystyką.
+
+Możliwe rozszerzenia:
+
+* podmiana `bert-tiny` na polskie modele bazowe (HerBERT, PolBERT),
+* zastosowanie top-k accuracy lub rankingowych metryk,
+* implementacja bardziej zaawansowanych obron (np. pełne DP-SGD),
+* dodanie agentów (multi-step prompts) oraz scenariuszy ataków na LLM-y w stylu *prompt injection*.
+
+---
+
+## 13. Bibliografia (wybór)
+
+
+* Devlin et al., **BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding**
+* Shokri et al., **Membership Inference Attacks against Machine Learning Models**
+* Tramèr et al., **Stealing Machine Learning Models via Prediction APIs**
+* Hinton et al., **Distilling the Knowledge in a Neural Network**
+* Dwork & Roth, **The Algorithmic Foundations of Differential Privacy**
+* Carlini et al., **Stealing Part of a Production Language Model**
+
+---
+
+```
+::contentReference[oaicite:0]{index=0}
+```
