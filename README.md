@@ -59,10 +59,6 @@ Zadanie QA jest sformułowane jako **wieloklasowa klasyfikacja** (pytanie → je
 - możliwości wykorzystania samej listy odpowiedzi jako potencjalnego „kanału wycieku” wiedzy (AIA),
 - podatności na klonowanie zachowania modelu przez *knowledge distillation* z API.
 
----
-
-```
-
 # Fine-Tuning BERT-Tiny for Polish QA & Security Attacks Demo
 ## 1. Cel projektu
 
