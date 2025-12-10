@@ -1,3 +1,68 @@
+# Ataki na duże modele językowe, czyli jak ukraść Chat GPT
+# Abstract
+
+Niniejsze repozytorium to małe, kontrolowane laboratorium bezpieczeństwa modeli językowych. Wykorzystujemy kompaktowy model typu encoder (`prajjwal1/bert-tiny`) wytrenowany do zadania pytanie–odpowiedź w języku polskim, aby w praktyce zademonstrować klasyczne wektory ataku na modele uczenia maszynowego: *membership inference*, *attribute inference* oraz *model stealing/extraction*. Zamiast pracować na miliardowych LLM-ach, które trudno zreplikować i debugować, pokazujemy te same zjawiska na niewielkim, w pełni odtwarzalnym przykładzie – z kompletnym kodem treningu, ataku i podstawowymi mechanizmami obrony.
+
+Projekt stanowi techniczny aneks do prezentacji o atakach na duże modele językowe („jak ukraść ChatGPT” rozumiane szerzej jako wyciek wiedzy, danych i zachowania modelu). Pokazujemy w praktyce, jak z pozornie „niewinnego” API modelu można wydobywać informacje o danych treningowych (atak członkostwa), ukrytych atrybutach (atak atrybutów) oraz jak na tej podstawie budować model–klon o zbliżonym zachowaniu (kradzież modelu). Jednocześnie demonstrujemy proste, inżynierskie środki ochrony: ograniczanie ekspozycji logitów, dodawanie szumu do odpowiedzi, weryfikację integralności wag oraz filtrowanie niebezpiecznych zapytań na wejściu.
+
+---
+
+## Wprowadzenie teoretyczne
+
+### 0.1. Kontekst: dlaczego bezpieczeństwo LLM ma znaczenie
+
+Duże modele językowe (LLM) stały się podstawą nowej generacji systemów informatycznych: od chatbotów i asystentów biurowych, przez wyszukiwarki, po narzędzia programistyczne i systemy wspierające decyzje biznesowe. W praktyce często działają jako „warstwa językowa” nad istniejącymi systemami i danymi, umożliwiając naturalną interakcję użytkowników z infrastrukturą IT, bazami wiedzy czy systemami operacyjnymi organizacji.
+
+Taka rola powoduje, że LLM-y stają się jednocześnie:
+
+- **powierzchnią ataku** – atakujemy model, jego API i dane treningowe,
+- **elementem łańcucha bezpieczeństwa** – model może przeciekać informacje lub wzmacniać inne luki,
+- **punktem koncentracji wartości** – kompetencje, know-how, dane i pieniądze koncentrują się w jednym artefakcie (modelu).
+
+W praktyce oznacza to, że bezpieczeństwo LLM nie jest wyłącznie problemem kryptografii czy sieci, ale przekrojowym zagadnieniem łączącym inżynierię oprogramowania, MLOps, ochronę danych oraz bezpieczeństwo aplikacyjne.
+
+### 0.2. Główne klasy ataków na modele językowe
+
+W literaturze i praktyce bezpieczeństwa modeli ML i LLM wyróżnia się kilka powtarzających się kategorii ataków:
+
+1. **Inference attacks na dane treningowe**
+   - **Membership Inference Attack (MIA)** – atakujący próbuje ustalić, czy konkretny rekord (np. pytanie + odpowiedź o określonej osobie) był użyty podczas treningu modelu. Wykorzystuje do tego różnice w zachowaniu modelu na przykładach „znanych” i „nieznanych” (inne rozkłady prawdopodobieństw, inne wartości straty).
+   - **Attribute Inference Attack (AIA)** – model jest traktowany jako „leaky database”: na podstawie odpowiedzi i rozkładu prawdopodobieństw atakujący próbuje odtworzyć ukryty atrybut rekordu (np. rok studiów, numer albumu, status klienta).
+
+2. **Model Stealing / Extraction**
+   - Celem jest zbudowanie **klona modelu** wyłącznie na podstawie odpowiedzi uzyskiwanych z API (widok black-box).
+   - Atakujący syntetyzuje lub zbiera zestaw zapytań, odpytuje oryginalny model (teacher), a następnie uczy model–studenta tak, aby jak najlepiej odtwarzał rozkład wyjściowy nauczyciela (klasyczna knowledge distillation, ale z zewnętrznego API).
+   - W kontekście komercyjnych LLM oznacza to ryzyko **kradzieży know-how** i zachowania modelu bez dostępu do jego wag.
+
+3. **Ataki na dane wejściowe i sterowanie modelem** (w tym repozytorium tylko zasygnalizowane)
+   - **Data poisoning** – modyfikacja danych treningowych tak, aby model zachowywał się w określony, szkodliwy sposób.
+   - **Backdoor / Trojan** – wbudowanie w model ukrytej funkcjonalności aktywowanej specyficznym „triggerem”.
+   - **Prompt injection / jailbreak** – manipulacja promptem tak, aby model zignorował zasady bezpieczeństwa i wykonał polecenia atakującego (np. ujawnił poufne dane lub wygenerował zabronioną treść).
+
+W tym repozytorium skupiamy się świadomie na **MIA, AIA oraz model stealing**, bo:
+
+- są dobrze mierzalne i możliwe do odtworzenia na małym modelu,
+- pokazują praktyczne konsekwencje nadmiernej ekspozycji API (pełne logity, brak filtracji zapytań),
+- stanowią dobry punkt wyjścia do rozmowy o bardziej złożonych atakach na produkcyjne LLM-y.
+
+### 0.3. Dlaczego mały model BERT-tiny jest dobrą „ofiarą”
+
+Zamiast operować na miliardowych LLM-ach, repozytorium wykorzystuje kompaktowy model **BERT-tiny**, który pełni rolę:
+
+- **modelu–ofiary** – trenujemy go na sztucznie skonstruowanym zbiorze QA (zawierającym m.in. dane o hipotetycznym studencie),
+- **piaskownicy badawczej** – możemy dowolnie modyfikować kod, trenować od zera, dodawać szum i implementować mechanizmy obrony,
+- **modelu referencyjnego** – część skryptów (MIA, AIA, stealing) można z niewielkimi zmianami przenieść na większe modele encoderowe.
+
+Zadanie QA jest sformułowane jako **wieloklasowa klasyfikacja** (pytanie → jedna z 286 możliwych odpowiedzi tekstowych). To świadomie trudne ustawienie (duża liczba klas, mało przykładów), ale idealne do demonstracji:
+
+- przeuczenia i różnic w zachowaniu na przykładach treningowych vs nowych,
+- możliwości wykorzystania samej listy odpowiedzi jako potencjalnego „kanału wycieku” wiedzy (AIA),
+- podatności na klonowanie zachowania modelu przez *knowledge distillation* z API.
+
+---
+
+```
+
 # Fine-Tuning BERT-Tiny for Polish QA & Security Attacks Demo
 ## 1. Cel projektu
 
